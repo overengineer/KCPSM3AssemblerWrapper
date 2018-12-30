@@ -1,2 +1,2 @@
 # KCPSM3AssemblerWrapper
-Python wrapper of KCPSM3 (PicoBlaze) Assembler
+Python wrapper for KCPSM3 (PicoBlaze) Assembler

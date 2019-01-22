@@ -1,0 +1,213 @@
+#!/usr/bin/python3
+#####################################################
+# MIT License
+# 
+# Copyright (c) 2018 Alper Said Soylu
+# 
+# Permission is hereby granted, free of charge, to 
+# any person obtaining a copy of this software and 
+# associated documentation files (the "Software"), 
+# to deal in the Software without restriction, 
+# including without limitation the rights
+# to use, copy, modify, merge, publish, distribute,
+# sublicense, and/or sell copies of the Software, and
+# to permit persons to whom the Software is furnished
+# to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission 
+# notice shall be included in all copies or 
+# substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY
+# OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+# LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+# FITNESS FOR A PARTICULAR PURPOSE AND 
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
+# OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+# CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+# OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR 
+# OTHER DEALINGS IN THE SOFTWARE.
+#####################################################;
+# Program:                                                        
+#																							  
+# PicoBlaze Assembler Wrapper
+#																							  
+# Description:                                                         
+#																							  
+# This program invokes KCPSM3 (PicoBlaze) Assembler
+# via dosbox at the background 
+# and assembles the .psm file passed as argument.    
+#																							  
+# Author  : Alper Said Soylu                                      
+#####################################################
+import sys, os, shutil, time, argparse, re
+from glob import glob
+from subprocess import Popen, PIPE
+#####################################################
+def execute(command, echo=True):
+  p          = Popen(command,
+    shell    = True,
+    bufsize  = 256,
+    stdout   = PIPE).stdout
+  out        = p.read().decode('utf-8')[:-1]
+  p.close()
+  if echo:
+    print(out)
+  return out
+#####################################################
+#args
+parser       = argparse.ArgumentParser(
+description  = '''
+This program invokes KCPSM3 (PicoBlaze) Assembler
+via dosbox at the background 
+and assembles the .psm file passed as argument.
+'''
+)
+parser.add_argument('psm_source',
+type         = str, 
+metavar      = 'PSM',
+help         = 'path to .psm file')
+parser.add_argument('-o',
+default      = None,
+dest         = 'out_folder',
+type         = str,
+help         = '''
+directory of the destination folder for output files,
+default is the same directory with the source file
+''')
+args         = parser.parse_args()
+verbose      = True
+#####################################################
+#get path to the psm source file
+psm_source   = args.psm_source
+#validate argument
+if not os.path.isfile(psm_source):
+  print('no such file: '+psm_source)
+  exit(1)
+psm_source   = os.path.expanduser(psm_source)
+psm_source   = os.path.realpath(psm_source)
+psm_dir,psm  = os.path.split(psm_source)
+psmname,ext  = os.path.splitext(psm)
+#####################################################
+#get path to the output folder
+if args.out_folder == None:
+  out_folder = psm_dir #default
+else: 
+  out_folder = args.out_folder
+#validate argument
+if not os.path.isdir(out_folder):
+  print('no such directory: '+out_folder)
+  exit(1)
+out_folder   = os.path.expanduser(out_folder)
+out_folder   = os.path.realpath(out_folder)
+#####################################################
+#get path to configuration file of dosbox
+conf_path    = '~/.dosbox/dosbox-0.74.conf'
+conf_path    = os.path.expanduser(conf_path)
+#####################################################
+#get startup command which mounts working diretory
+with open(conf_path,'r') as f:
+  conf_cmd   = f.read().split('[autoexec]')[1]
+mount_cmd    = re.search('MOUNT . .*', conf_cmd)[0]
+split        = mount_cmd.split(' ')
+mount_letter = split[-2]
+#####################################################
+#get dosbox KCPSM3 workspace
+mount_point  = os.path.expanduser(split[-1])
+workspace    = os.path.join(mount_point,'PICO/ASM/')
+temp_dir     = os.path.join(workspace,'TEMP')
+#####################################################
+#check if filename ok
+if len(psmname)>8:
+  print('filename should be at most 8 characters')
+  exit(1)
+#####################################################
+#backup configuration file
+conf_orig    = conf_path+'.orig'
+shutil.copyfile(src=conf_path,dst=conf_orig)
+#configure dosbox
+autoexec     = '''
+/assure that current dir is the mount dir
+{LETTER}:
+/go to the KPCSM3 workspace
+CD PICO/ASM
+/redirect KCPSM3 output to a text file
+KCPSM3.EXE TEMP/{PSM} > TEMP/OUT.TXT
+EXIT
+'''.format(
+LETTER       = mount_letter,
+PSM          = psm.upper()
+)
+with open(conf_path,'a') as f:
+  if not autoexec in conf_cmd:
+    f.write(autoexec)
+#####################################################
+#execute bash commands
+msg          = execute('''
+#####################################################
+#make temporary directory
+mkdir -p {TEMP}
+cd {TEMP}
+#copy source file to temp dir
+cp {PSM_SRC} {PSM_DST}
+#disable pop-up gui
+export SDL_VIDEODRIVER=dummy
+#invoke dosbox
+echo ---start dosbox---
+dosbox
+echo ---end dosbox---
+echo ---dosbox output message---
+#display dosbox output
+cat OUT.TXT
+echo ---end dosbox output---
+#recover original conf file from backup
+cp {CNF_ORIG} {CNF}
+#remove psm file from temp dir
+rm {PSM_DST}
+#remove output file
+rm OUT.TXT
+exit
+#####################################################
+'''.format(
+TEMP         = temp_dir,
+PSM_SRC      = psm_source,
+PSM_DST      = os.path.join(temp_dir,psm.upper()),
+CNF          = conf_path,
+CNF_ORIG     = conf_orig,
+OUT          = out_folder
+),echo       = verbose)
+#####################################################
+#fix output files
+pattern = temp_dir+"/*"
+
+for file in glob(pattern):
+  with open(file,"r") as f:
+    content = f.read()
+  os.remove(file)
+  oldbase = os.path.basename(file)
+  oldname, ext = os.path.splitext(oldbase)
+  ext     = ext.lower()
+  newbase = psmname+ext
+  pattern = os.path.join("temp",oldname.lower())
+  fixed = content.replace(pattern,psmname)
+  file = os.path.join(temp_dir,newbase)
+  with open(file,"w") as f:
+    f.write(fixed)
+  #move output file to the destination
+  dest = os.path.join(out_folder,newbase)
+  shutil.move(file,dest)
+#remove temporary directory
+shutil.rmtree(temp_dir)
+#####################################################
+error_code   = int(not 'KCPSM3 successful' in msg)
+#print final message
+if verbose:
+  print('''
+process terminated at {TIME} with error code: {ERROR}
+'''.format(
+TIME         = time.asctime(time.localtime()),
+ERROR        = error_code))
+exit(error_code)
+#####################################################
+
